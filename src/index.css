@@ -1,0 +1,164 @@
+@import url('https://fonts.loli.net/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@400;500;700&family=ZCOOL+KuaiLe&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 36 45% 96%;
+    --foreground: 20 25% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 20 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 25% 15%;
+    --primary: 351 68% 35%;
+    --primary-foreground: 40 60% 97%;
+    --secondary: 36 45% 92%;
+    --secondary-foreground: 20 25% 20%;
+    --muted: 36 30% 92%;
+    --muted-foreground: 25 10% 42%;
+    --accent: 351 60% 94%;
+    --accent-foreground: 351 68% 30%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 20% 85%;
+    --input: 30 20% 85%;
+    --ring: 351 68% 35%;
+    --radius: 0.875rem;
+    --sidebar-background: 36 45% 96%;
+    --sidebar-foreground: 20 25% 15%;
+    --sidebar-primary: 351 68% 35%;
+    --sidebar-primary-foreground: 40 60% 97%;
+    --sidebar-accent: 36 45% 92%;
+    --sidebar-accent-foreground: 20 25% 20%;
+    --sidebar-border: 30 20% 85%;
+    --sidebar-ring: 351 68% 35%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background-image:
+      radial-gradient(circle at 15% 20%, rgba(163, 30, 50, 0.05) 0%, transparent 40%),
+      radial-gradient(circle at 85% 10%, rgba(217, 143, 43, 0.07) 0%, transparent 35%),
+      radial-gradient(circle at 80% 85%, rgba(163, 30, 50, 0.04) 0%, transparent 40%);
+    background-attachment: fixed;
+  }
+  h1, h2, h3, .font-serif-sc {
+    font-family: 'Noto Serif SC', 'Songti SC', serif;
+  }
+  .font-fun {
+    font-family: 'ZCOOL KuaiLe', 'Noto Sans SC', sans-serif;
+  }
+}
+
+/* ---------- 鹿大指南自定义样式 ---------- */
+
+.paper-card {
+  @apply bg-card rounded-2xl border shadow-sm;
+  box-shadow: 0 1px 2px rgba(80, 40, 20, 0.05), 0 8px 24px -12px rgba(80, 40, 20, 0.12);
+}
+
+.sticker {
+  @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold;
+}
+
+.tape {
+  position: absolute;
+  width: 92px;
+  height: 26px;
+  background: rgba(217, 143, 43, 0.28);
+  backdrop-filter: blur(1px);
+  border-left: 2px dashed rgba(255, 255, 255, 0.5);
+  border-right: 2px dashed rgba(255, 255, 255, 0.5);
+  transform: rotate(-4deg);
+  top: -12px;
+  left: 50%;
+  margin-left: -46px;
+}
+
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+.animate-float { animation: float-y 3.5s ease-in-out infinite; }
+
+@keyframes wiggle {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+.animate-wiggle { animation: wiggle 2.2s ease-in-out infinite; }
+
+@keyframes pop-in {
+  0% { transform: scale(0.7) rotate(-4deg); opacity: 0; }
+  70% { transform: scale(1.06) rotate(1deg); }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+.animate-pop { animation: pop-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+@keyframes roulette-spin {
+  0% { transform: rotate(0) scale(1); }
+  50% { transform: rotate(180deg) scale(1.15); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+.animate-roulette { animation: roulette-spin 0.5s ease-in-out infinite; }
+
+@keyframes marquee-y {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+mark {
+  @apply bg-amber-200 text-inherit rounded-sm px-0.5;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.dotted-bg {
+  background-image: radial-gradient(rgba(163, 30, 50, 0.12) 1.5px, transparent 1.5px);
+  background-size: 18px 18px;
+}
+
+.entry-body p {
+  @apply leading-relaxed text-[15px] text-foreground/85;
+}
+.entry-body p + p {
+  @apply mt-2;
+}
+
+/* 章节主题色 */
+.hue-red { --ch: 351 68% 38%; }
+.hue-amber { --ch: 35 90% 42%; }
+.hue-sky { --ch: 200 75% 40%; }
+.hue-green { --ch: 140 45% 35%; }
+.hue-violet { --ch: 265 55% 50%; }
+.hue-crimson { --ch: 0 70% 40%; }
+.hue-pink { --ch: 330 65% 52%; }
+.hue-slate { --ch: 215 20% 40%; }
+.hue-indigo { --ch: 228 65% 48%; }
+.hue-teal { --ch: 175 60% 32%; }
+.hue-orange { --ch: 24 90% 45%; }
+.hue-cyan { --ch: 190 80% 35%; }
+
+.ch-accent { color: hsl(var(--ch)); }
+.ch-bg { background-color: hsl(var(--ch)); }
+.ch-bg-soft { background-color: hsl(var(--ch) / 0.1); }
+.ch-border { border-color: hsl(var(--ch) / 0.35); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: hsl(351 30% 75%);
+  border-radius: 8px;
+  border: 2px solid hsl(36 45% 96%);
+}
+
+/* 像素小鸟游戏浮层 */
+.bird-screen { transition: opacity .18s ease; }
+.bird-screen.hide { opacity: 0; pointer-events: none; }

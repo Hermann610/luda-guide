@@ -1,0 +1,7 @@
+name = "luda-auth"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+kv_namespaces = [
+  { binding = "USERS", id = "1822dfd298c1472d86bd768cd4a9370d" }
+]
