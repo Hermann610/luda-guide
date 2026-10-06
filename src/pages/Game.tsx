@@ -18,7 +18,7 @@ function NavAuth() {
   if (user === null) {
     return (
       <a href="/login" className="px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full hover:bg-muted transition flex items-center gap-1 whitespace-nowrap">
-        <LogIn className="w-3.5 h-3.5" /> 登录
+        <LogIn className="w-3.5 h-3.5" /> 登录 / 注册
       </a>
     );
   }

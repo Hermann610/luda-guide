@@ -9,7 +9,7 @@
 
 ## 功能一览
 
-- 🔐 **邀请制访问**：全站强制登录，不开放注册，账号由站长在 Cloudflare KV 预置（仅 hello_world）
+- 🔐 **校内邮箱注册与登录**：全站强制登录，可配置开放人大 `@ruc.edu.cn` 邮箱验证码注册；旧 KV 预置账号继续可用，注册默认关闭
 - 🍜 **今天吃什么**：选择困难症救星，双校区 24 档口随机抽
 - 🐤 **像素小鸟**：经典小游戏，登录后成绩自动上榜，前 50 名排行
 - 🧮 **GPA 计算器**：4 分制实时换算，支持从教务系统导出成绩单（xlsx）一键导入，纯本地解析不上传
@@ -18,7 +18,7 @@
 
 ## 技术栈
 
-React 18 + TypeScript + Vite + Tailwind CSS 3 + shadcn/ui，纯前端静态站，数据全部本地加载。
+React 19 + TypeScript + Vite + Tailwind CSS 3 + shadcn/ui；页面与工具在浏览器运行，登录、注册与排行榜使用 Cloudflare Pages Functions / Worker。
 
 ## 本地运行
 
@@ -35,7 +35,7 @@ npm run build
 npx wrangler pages deploy dist --project-name=luda-guide
 ```
 
-任何静态托管（GitHub Pages / Vercel / Netlify / OSS）均可直接部署 `dist/` 目录。
+`dist/` 可用于静态页面预览；完整登录、注册与排行榜需要同时部署 Cloudflare Pages Functions 和 auth Worker，不能只上传静态文件。
 
 ## 数据来源与致谢
 
@@ -47,21 +47,27 @@ npx wrangler pages deploy dist --project-name=luda-guide
 
 ## 登录系统
 
-游客可直接浏览全站；导航栏可进入「登录 / 注册」页——随意输入名称（要求合法合规），**未注册的名称会自动注册**，已注册则校验密码登录。登录态为 HMAC-SHA256 签名的 HttpOnly Cookie，保留 7 天，访问 `/logout` 退出。
+未登录用户跳转 `/login`，可从登录页进入 `/register`，使用本人校内邮箱接收验证码后注册。验证码 10 分钟有效、60 秒重发冷却、最多 5 次错误尝试，一个邮箱一个账号；校友邮箱和非人大邮箱不支持注册。注册默认关闭，完成配置和真实收信验收后开启。旧账号仍用账号名与密码登录。登录态为 HMAC-SHA256 签名的 HttpOnly Cookie，保留 7 天，访问 `/logout` 退出。
+
+**没有域名的免费配置、开关及验收步骤见 [校内邮箱注册说明](docs/email-registration.md)。** 免费发信采用 Brevo，每日服务商配额以官方套餐为准；本模块另限制任意连续 24 小时最多 250 次发信尝试。
 
 架构：
 
-- `functions/_middleware.ts`：Pages Functions 中间件，游客放行、`/login` 表单、`/api/me` 当前用户
-- `auth-worker/`：Cloudflare Worker + KV，负责注册/登录（PBKDF2-SHA256 10 万次迭代存储密码哈希）与防爆破锁定
-- 密码经 Worker 校验，不进入本仓库；两边共享 `SESSION_SECRET` 签名会话
+- `functions/_middleware.ts`：Pages Functions 中间件，访问控制、登录表单、注册代理、`/api/me` 当前用户
+- `server/registration.ts`：注册页面与 Pages 请求签名
+- `auth-worker/`：Cloudflare Worker；KV 保留旧账号与排行榜，SQLite Durable Object 保存新账号、邮箱索引、验证码与限流计数
+- 密码使用 PBKDF2-SHA256 10 万次迭代与随机盐；两边共享 `SESSION_SECRET` 签名会话及注册代理请求
 
-所需环境变量（均通过 `wrangler secret put` 配置，不入库）：
+所需环境变量（按部署位置配置，密钥以 Secret 保存，不入库）：
 
 | 位置 | 变量 | 说明 |
 |---|---|---|
 | Pages 项目 | `AUTH_API` | auth Worker 地址 |
 | Pages 项目 | `SESSION_SECRET` | 会话签名密钥 |
 | Worker | `SESSION_SECRET` | 同上（与 Pages 一致） |
+| Pages / Worker | `REGISTRATION_ENABLED` | 字符串 `true` 开启注册；默认/关闭为 `false` |
+| Worker | `BREVO_API_KEY` | Brevo 事务邮件 API key，Secret |
+| Worker | `MAIL_FROM` | 本人控制且在 Brevo 已验证的发件邮箱，Secret |
 
 ## 许可证
 

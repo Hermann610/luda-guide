@@ -1,9 +1,10 @@
-// Cloudflare Pages Functions 中间件：游客开放访问 + 可选注册/登录
-// 账号校验调用 luda-auth Worker（用户存储在 KV），密码不经过本站代码
+// Cloudflare Pages Functions：登录、校内邮箱注册和访问控制。
+import { readSmallBody, registrationForm, signedRegistrationHeaders } from '../server/registration.ts';
 
 interface Env {
   AUTH_API: string;
   SESSION_SECRET: string;
+  REGISTRATION_ENABLED?: string;
 }
 
 const COOKIE_NAME = "luda_session";
@@ -29,7 +30,8 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 async function readSession(cookieHeader: string, secret: string): Promise<string | null> {
   const m = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAME}=([^;]+)`));
   if (!m) return null;
-  const token = decodeURIComponent(m[1]);
+  let token: string;
+  try { token = decodeURIComponent(m[1]); } catch { return null; }
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
@@ -39,8 +41,8 @@ async function readSession(cookieHeader: string, secret: string): Promise<string
     const ok = await crypto.subtle.verify("HMAC", key, b64urlDecode(sig), new TextEncoder().encode(payload));
     if (!ok) return null;
     const data = JSON.parse(new TextDecoder().decode(b64urlDecode(payload)));
-    if (!data?.u || !Number.isFinite(data.exp) || Date.now() > data.exp) return null;
-    return String(data.u);
+    if (typeof data?.u !== "string" || !data.u.trim() || data.u.length > 20 || !Number.isFinite(data.exp) || Date.now() >= data.exp) return null;
+    return data.u;
   } catch {
     return null;
   }
@@ -51,7 +53,7 @@ const PAGE = (body: string) => `<!doctype html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>鹿大摸鱼站 · 登录</title>
+<title>鹿大摸鱼站 · 账号</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
@@ -63,11 +65,13 @@ const PAGE = (body: string) => `<!doctype html>
   .sub { text-align: center; font-size: 12px; color: #a08d7a; margin-bottom: 8px; line-height: 1.7; }
   label { display: block; font-size: 13px; font-weight: bold; margin: 14px 0 6px; color: #6b5a49; }
   input { width: 100%; padding: 12px 14px; border: 1.5px solid #e3d3bd; border-radius: 12px;
-          font-size: 15px; outline: none; background: #fff; transition: border-color .2s; }
+          font-size: 16px; outline: none; background: #fff; transition: border-color .2s; }
   input:focus { border-color: #8a1f2d; }
   button { width: 100%; margin-top: 22px; padding: 13px; border: 0; border-radius: 999px;
            background: #8a1f2d; color: #fff; font-size: 15px; font-weight: bold; cursor: pointer; transition: background .2s; }
   button:hover { background: #701824; }
+  button:disabled { opacity: .55; cursor: wait; }
+  [hidden] { display: none !important; }
   .err { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #fdecec;
          border: 1px solid #f5c6c6; color: #b02a2a; font-size: 13px; text-align: center; }
   .notice { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: #fdf3e3;
@@ -80,25 +84,42 @@ const PAGE = (body: string) => `<!doctype html>
 <body>${body}</body>
 </html>`;
 
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[char]!));
+
 const loginForm = (error?: string) => PAGE(`
   <div class="card">
   <div class="deer">🦌</div>
   <h1>登录</h1>
-  <div class="sub">请使用内部账号登录</div>
-  <div class="notice">🔒 本站不对外开放<br />只是一个练手项目，没什么可以看的了<br /><span style="font-size:12px; font-weight:normal;">账号问题请联系 2304179201@qq.com</span></div>
+  <div class="sub">使用你的账号名和密码登录</div>
   <form method="POST" action="/login">
     <label for="u">账号</label>
     <input id="u" name="username" autocomplete="username" required autofocus maxlength="20" />
     <label for="p">密码</label>
     <input id="p" name="password" type="password" autocomplete="current-password" required minlength="6" maxlength="64" />
     <button type="submit">进入</button>
-    ${error ? `<div class="err">${error}</div>` : ""}
+    ${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}
   </form>
-  <div class="tip">登录状态保留 7 天<br />没有账号？请联系站长</div>
+  <div class="tip">登录状态保留 7 天</div>
+  <a class="guest" href="/register">没有账号？使用人大校内邮箱注册</a>
   </div>
 `);
 
-const headers = { "Content-Type": "text/html; charset=utf-8" };
+const headers = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" };
+
+// Cover both the response headers and body read with the same timeout.
+async function workerRequest(env: Env, path: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(`${env.AUTH_API}${path}`, { ...init, signal: controller.signal });
+    const body = await response.arrayBuffer();
+    return new Response([204, 205, 304].includes(response.status) ? null : body, {
+      status: response.status, headers: response.headers,
+    });
+  } finally { clearTimeout(timer); }
+}
 
 export const onRequest: PagesFunction<Env> = async (context) => {
   const env = context.env;
@@ -124,7 +145,41 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     });
   }
 
-  // 登录/注册页
+  if (url.pathname === '/register' && context.request.method === 'GET') {
+    return new Response(PAGE(registrationForm(env.REGISTRATION_ENABLED === 'true')), { headers });
+  }
+
+  if (['/api/register/code', '/api/register/complete'].includes(url.pathname)) {
+    const jsonHeaders = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+    const fail = (error: string, status: number) => new Response(JSON.stringify({ ok: false, error }), { status, headers: jsonHeaders });
+    if (context.request.method !== 'POST') return fail('请求方法不支持', 405);
+    if (env.REGISTRATION_ENABLED !== 'true') return fail('注册暂未开放', 503);
+    if (context.request.headers.get('Origin') !== url.origin
+      || !context.request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) return fail('无效请求', 403);
+    let body: string;
+    try { body = await readSmallBody(context.request); } catch { return fail('请求过大或格式错误', 413); }
+    try {
+      const ip = context.request.headers.get('CF-Connecting-IP');
+      if (!ip) return fail('注册服务暂时不可用', 503);
+      const requestHeaders = await signedRegistrationHeaders(url.pathname, body, ip, env.SESSION_SECRET);
+      const response = await workerRequest(env, url.pathname, { method: 'POST', headers: requestHeaders, body });
+      const data = await response.json() as { ok?: boolean; token?: string; error?: string; challenge?: string; retryAfter?: number; expiresIn?: number };
+      if (url.pathname === '/api/register/complete' && response.ok) {
+        const username = (JSON.parse(body) as { username?: unknown }).username;
+        if (data?.ok !== true || typeof data.token !== 'string' || typeof username !== 'string'
+          || await readSession(`${COOKIE_NAME}=${encodeURIComponent(data.token)}`, env.SESSION_SECRET) !== username.trim()) {
+          return fail('注册结果无法确认，请尝试登录', 503);
+        }
+        return new Response(JSON.stringify({ ok: true }), { headers: { ...jsonHeaders,
+          'Set-Cookie': `${COOKIE_NAME}=${encodeURIComponent(data.token)}; Path=/; Max-Age=${SESSION_TTL_S}; HttpOnly; Secure; SameSite=Lax` } });
+      }
+      // 不向浏览器暴露 Worker 会话令牌或服务商返回内容。
+      return new Response(JSON.stringify({ ok: data.ok, error: data.error, challenge: data.challenge,
+        retryAfter: data.retryAfter, expiresIn: data.expiresIn }), { status: response.status, headers: jsonHeaders });
+    } catch { return fail('注册服务暂时不可用，请稍后再试', 503); }
+  }
+
+  // 登录页
   if (url.pathname === "/login") {
     if (context.request.method === "POST") {
       let username = "", password = "";
@@ -135,13 +190,14 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       } catch { /* 按校验失败处理 */ }
 
       try {
-        const resp = await fetch(`${env.AUTH_API}/api/auth`, {
+        const resp = await workerRequest(env, "/api/auth", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username, password }),
         });
         const data = await resp.json() as { ok: boolean; token?: string; error?: string };
-        if (data.ok && data.token) {
+        if (resp.ok && data?.ok === true && typeof data.token === "string"
+          && await readSession(`${COOKIE_NAME}=${encodeURIComponent(data.token)}`, env.SESSION_SECRET) === username) {
           return new Response(null, {
             status: 302,
             headers: {
@@ -151,7 +207,9 @@ export const onRequest: PagesFunction<Env> = async (context) => {
             },
           });
         }
-        return new Response(loginForm(data.error ?? "登录失败，请稍后再试"), { status: 401, headers });
+        return new Response(loginForm(typeof data?.error === "string" ? data.error : "登录失败，请稍后再试"), {
+          status: resp.status === 429 ? 429 : resp.status >= 500 || resp.ok ? 503 : 401, headers,
+        });
       } catch {
         return new Response(loginForm("服务暂时不可用，请稍后再试"), { status: 503, headers });
       }
@@ -173,7 +231,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   // 小游戏排行榜
   if (url.pathname === "/api/score/leaderboard") {
     try {
-      const resp = await fetch(`${env.AUTH_API}/api/score/leaderboard`, {
+      const resp = await workerRequest(env, "/api/score/leaderboard", {
         headers: { "Cache-Control": "no-store" },
       });
       return new Response(resp.body, {
@@ -183,7 +241,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     } catch {
       return new Response(JSON.stringify({ ok: false, leaderboard: [] }), {
         status: 503,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
   }
@@ -191,9 +249,9 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   // 小游戏成绩提交（需登录，会话令牌原样转发给 Worker 校验）
   if (url.pathname === "/api/score/submit" && context.request.method === "POST") {
     const m = cookie.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAME}=([^;]+)`));
-    const token = m ? decodeURIComponent(m[1]) : "";
     try {
-      const resp = await fetch(`${env.AUTH_API}/api/score/submit`, {
+      const token = m ? decodeURIComponent(m[1]) : "";
+      const resp = await workerRequest(env, "/api/score/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: context.request.body,
@@ -207,7 +265,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     } catch {
       return new Response(JSON.stringify({ ok: false, error: "服务暂时不可用" }), {
         status: 503,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
   }

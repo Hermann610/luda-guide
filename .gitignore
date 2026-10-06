@@ -25,3 +25,9 @@ dist-ssr
 
 # Wrangler local state
 .wrangler
+
+# Local secrets (never commit real mail/session credentials)
+.dev.vars*
+.env
+.env.*
+!.env.example

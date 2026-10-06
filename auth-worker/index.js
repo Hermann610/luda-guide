@@ -1,54 +1,6 @@
-// luda-auth：鹿大摸鱼站开放注册/登录服务
-// 存储：Cloudflare KV（用户名 → PBKDF2 密码哈希）
-// 会话：HMAC-SHA256 签名令牌（与 Pages 中间件共享 SESSION_SECRET）
-
-const TTL_MS = 7 * 24 * 3600 * 1000; // 7 天
-
-// 基础合规校验：长度、字符集、简单敏感词
-const NAME_RE = /^[\w一-鿿-]{2,20}$/;
-const BLOCKED = ["admin", "administrator", "root", "system", "官方", "管理员", "鹿大生存指南", "鹿大摸鱼站", "hermann"];
-
-function validateName(name) {
-  if (!NAME_RE.test(name)) return "名称需为 2-20 位，只能包含中文、字母、数字、下划线或连字符";
-  const lower = name.toLowerCase();
-  if (BLOCKED.some((b) => lower.includes(b.toLowerCase()))) return "这个名称不能使用，请换一个";
-  return null;
-}
-
-function b64url(buf) {  return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function pbkdf2(password, saltHex) {
-  const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]
-  );
-  const salt = new Uint8Array(saltHex.match(/../g).map((h) => parseInt(h, 16)));
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
-    key, 256
-  );
-  return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function hmacKey(secret) {
-  return crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]
-  );
-}
-
-async function sign(payloadB64, secret) {
-  const key = await hmacKey(secret);
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadB64));
-  return `${payloadB64}.${b64url(sig)}`;
-}
-
-const json = (obj, status = 200) =>
-  new Response(JSON.stringify(obj), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
-  });
+import { TTL_MS, validateName, b64url, pbkdf2, hmacKey, sign, json } from './auth-utils.js';
+import { registrationRequest } from './registration.js';
+export { RegistrationStore } from './registration.js';
 
 const LB_KEY = "leaderboard:v1";
 const LB_MAX = 50;
@@ -71,8 +23,8 @@ async function verifySessionToken(token, secret) {
     const ok = await crypto.subtle.verify("HMAC", key, b64urlDecode(sig), new TextEncoder().encode(payload));
     if (!ok) return null;
     const data = JSON.parse(new TextDecoder().decode(b64urlDecode(payload)));
-    if (!data?.u || !Number.isFinite(data.exp) || Date.now() > data.exp) return null;
-    return String(data.u);
+    if (typeof data?.u !== "string" || !data.u.trim() || data.u.length > 20 || !Number.isFinite(data.exp) || Date.now() >= data.exp) return null;
+    return data.u;
   } catch {
     return null;
   }
@@ -80,16 +32,27 @@ async function verifySessionToken(token, secret) {
 
 async function getLeaderboard(env) {
   const list = await env.USERS.get(LB_KEY, "json");
-  return Array.isArray(list) ? list : [];
+  if (list === null) return [];
+  if (!Array.isArray(list) || list.some(entry => !entry || typeof entry.u !== "string"
+    || !entry.u.trim() || !Number.isInteger(entry.s) || entry.s < 0 || entry.s > 99999
+    || !Number.isFinite(entry.t) || entry.t < 0)) {
+    throw new Error("Invalid leaderboard record");
+  }
+  return list;
 }
 
-export default {
-  async fetch(req, env) {
+async function handleRequest(req, env) {
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
     }
+
+    if (!env.USERS || typeof env.SESSION_SECRET !== "string" || !env.SESSION_SECRET) {
+      return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503);
+    }
+
+    if (url.pathname.startsWith('/api/register/')) return registrationRequest(req, env);
 
     // 排行榜：返回前 50 名 {u, s, t}
     if (req.method === "GET" && url.pathname === "/api/score/leaderboard") {
@@ -106,7 +69,8 @@ export default {
 
       let body;
       try { body = await req.json(); } catch { return json({ ok: false, error: "请求格式错误" }, 400); }
-      const score = Number(body.score);
+      if (!body || typeof body !== "object" || Array.isArray(body)) return json({ ok: false, error: "请求格式错误" }, 400);
+      const score = body.score;
       if (!Number.isInteger(score) || score < 0 || score > 99999) {
         return json({ ok: false, error: "成绩不合法" }, 400);
       }
@@ -133,8 +97,12 @@ export default {
     if (req.method === "POST" && url.pathname === "/api/auth") {
       let body;
       try { body = await req.json(); } catch { return json({ ok: false, error: "请求格式错误" }, 400); }
-      const username = String(body.username ?? "").trim();
-      const password = String(body.password ?? "");
+      if (!body || typeof body !== "object" || Array.isArray(body)
+        || typeof body.username !== "string" || typeof body.password !== "string") {
+        return json({ ok: false, error: "请求格式错误" }, 400);
+      }
+      const username = body.username.trim();
+      const password = body.password;
 
       const nameErr = validateName(username);
       if (nameErr) return json({ ok: false, error: nameErr }, 400);
@@ -151,9 +119,20 @@ export default {
 
       const existing = await env.USERS.get(username, "json");
       if (!existing) {
+        // 已验证邮箱的账号由 Durable Object 保存；关闭新注册不影响其登录。
+        if (env.REGISTRATION) {
+          const store = env.REGISTRATION.get(env.REGISTRATION.idFromName('ruc-registration-v1'));
+          return store.fetch(new Request('https://registration.internal/login', {
+            method: 'POST', body: JSON.stringify({ username, password }),
+          }));
+        }
         // 不开放注册：账号不存在直接拒绝（账号由管理员在 KV 中预置）
         await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
         return json({ ok: false, error: "账号不存在，本站不开放注册" }, 403);
+      }
+      if (typeof existing.salt !== "string" || !/^(?:[0-9a-f]{2})+$/i.test(existing.salt)
+        || typeof existing.hash !== "string" || !/^[0-9a-f]{64}$/i.test(existing.hash)) {
+        return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503);
       }
       const hash = await pbkdf2(password, existing.salt);
       if (hash !== existing.hash) {
@@ -169,5 +148,11 @@ export default {
     }
 
     return json({ ok: false, error: "not found" }, 404);
+}
+
+export default {
+  async fetch(req, env) {
+    try { return await handleRequest(req, env); }
+    catch { return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503); }
   },
 };

@@ -5,3 +5,15 @@ compatibility_date = "2025-01-01"
 kv_namespaces = [
   { binding = "USERS", id = "1822dfd298c1472d86bd768cd4a9370d" }
 ]
+
+# 完成 docs/email-registration.md 中的配置和真实收信验收后再改为 true。
+[vars]
+REGISTRATION_ENABLED = "false"
+
+[[durable_objects.bindings]]
+name = "REGISTRATION"
+class_name = "RegistrationStore"
+
+[[migrations]]
+tag = "ruc-registration-v1"
+new_sqlite_classes = ["RegistrationStore"]
