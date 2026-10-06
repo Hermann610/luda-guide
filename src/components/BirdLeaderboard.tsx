@@ -1,25 +1,12 @@
-import { useEffect, useState } from "react";
+import { useLeaderboard } from "@/hooks/use-leaderboard";
 import { Trophy } from "lucide-react";
 
-export interface LeaderEntry {
-  u: string;
-  s: number;
-  t: number;
-}
+export type { LeaderEntry } from "@/lib/leaderboard";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 export default function BirdLeaderboard({ refreshKey, me }: { refreshKey: number; me: string | null }) {
-  const [list, setList] = useState<LeaderEntry[] | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/score/leaderboard")
-      .then((r) => r.json())
-      .then((d) => { if (alive) setList(Array.isArray(d.leaderboard) ? d.leaderboard : []); })
-      .catch(() => { if (alive) setList([]); });
-    return () => { alive = false; };
-  }, [refreshKey]);
+  const { list, error, retry } = useLeaderboard(refreshKey);
 
   return (
     <div className="paper-card p-5 md:p-6">
@@ -29,7 +16,13 @@ export default function BirdLeaderboard({ refreshKey, me }: { refreshKey: number
       </div>
       <p className="text-xs text-muted-foreground mb-4">按用户名记录最好成绩，前 50 名上榜。</p>
 
-      {list === null ? (
+      {error ? (
+        <div role="alert" className="text-sm text-red-700 py-4 text-center">
+          <p>{error}</p>
+          <button onClick={retry} className="mt-2 rounded-full border px-4 py-1">重试</button>
+          {error.includes("登录") && <a href="/login" className="ml-3 underline">去登录</a>}
+        </div>
+      ) : list === null ? (
         <div className="text-sm text-muted-foreground py-6 text-center">加载中…</div>
       ) : list.length === 0 ? (
         <div className="text-sm text-muted-foreground py-6 text-center">
@@ -37,7 +30,7 @@ export default function BirdLeaderboard({ refreshKey, me }: { refreshKey: number
         </div>
       ) : (
         <ol className="space-y-1.5">
-          {list.slice(0, 20).map((e, i) => (
+          {list.map((e, i) => (
             <li
               key={e.u}
               className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm ${
