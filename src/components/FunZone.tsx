@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { foodPool } from "@/data/guide";
+import { fetchLeaderboard } from "@/lib/leaderboard";
 import { UtensilsCrossed, RefreshCw, MapPin } from "lucide-react";
 import type { LeaderEntry } from "@/components/BirdLeaderboard";
 
@@ -16,14 +17,21 @@ export default function FunZone() {
 
   // ---- 像素小鸟前三榜 ----
   const [top3, setTop3] = useState<LeaderEntry[] | null>(null);
+  const [topError, setTopError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = () => { setTop3(null); setTopError(null); setRetryKey(key => key + 1); };
   useEffect(() => {
     let alive = true;
-    fetch("/api/score/leaderboard")
-      .then((r) => r.json())
-      .then((d) => { if (alive) setTop3((Array.isArray(d.leaderboard) ? d.leaderboard : []).slice(0, 3)); })
-      .catch(() => { if (alive) setTop3([]); });
-    return () => { alive = false; };
-  }, []);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    fetchLeaderboard(controller.signal)
+      .then(list => { if (alive) setTop3(list.slice(0, 3)); })
+      .catch(error => {
+        if (alive) setTopError(controller.signal.aborted ? "加载超时，请重试。" : error instanceof Error ? error.message : "网络异常，请重试。");
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => { alive = false; clearTimeout(timeout); controller.abort(); };
+  }, [retryKey]);
 
   const spinFood = () => {
     setSpinning(true);
@@ -98,7 +106,12 @@ export default function FunZone() {
           <div className="text-xs font-bold text-muted-foreground mb-2 flex items-center gap-1">
             🏆 当前前三
           </div>
-          {top3 === null ? (
+          {topError ? (
+            <div role="alert" className="text-xs text-red-700">
+              {topError} <button onClick={retry} className="ml-2 underline">重试</button>
+              {topError.includes("登录") && <a href="/login" className="ml-2 underline">去登录</a>}
+            </div>
+          ) : top3 === null ? (
             <div className="text-xs text-muted-foreground">加载中…</div>
           ) : top3.length === 0 ? (
             <div className="text-xs text-muted-foreground">还没有人上榜，去玩第一局，把名字留在最上面 👆</div>
