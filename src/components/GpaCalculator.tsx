@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { gpaScale, scoreToGpa } from "@/data/guide";
+import { parseTranscript } from "@/lib/transcript";
 import { Calculator, Plus, Trash2, GraduationCap, Upload, FileSpreadsheet } from "lucide-react";
 
 interface Course {
@@ -11,17 +12,6 @@ interface Course {
 
 let nextId = 3;
 
-// 等级制 → 百分制估算（取人大绩点区间中值附近）
-const GRADE_MAP: Record<string, number> = {
-  "优": 92, "优秀": 92, "A": 92,
-  "良": 84, "良好": 84, "B": 84,
-  "中": 74, "中等": 74, "C": 74,
-  "及格": 62, "合格": 62, "D": 62,
-  "不及格": 0, "不合格": 0, "F": 0,
-};
-// 不纳入 GPA 的成绩标记
-const PASS_MARKS = new Set(["通过", "P", "p", "免修", "免考", "缺考"]);
-
 export default function GpaCalculator() {
   const [courses, setCourses] = useState<Course[]>([
     { id: 1, name: "微积分", credit: 4, score: 88 },
@@ -29,51 +19,34 @@ export default function GpaCalculator() {
   ]);
 
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importIssues, setImportIssues] = useState<string[]>([]);
+  const importLock = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // ---- 微人大成绩单 xlsx 导入 ----
   const importTranscript = async (file: File) => {
+    if (importLock.current) return;
+    if (!/\.xlsx?$/i.test(file.name) || file.size > 5 * 1024 * 1024) {
+      setImportMsg({ ok: false, text: "请选择不超过 5 MB 的 xlsx / xls 成绩单。" });
+      return;
+    }
+    importLock.current = true;
+    setImporting(true);
+    setImportIssues([]);
     try {
       const XLSX = await import("xlsx");
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
+      if (!wb.SheetNames.length) throw new Error("成绩单没有工作表。");
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-      // 找表头行与关键列
-      let headerIdx = -1, nameCol = -1, creditCol = -1, scoreCol = -1;
-      for (let i = 0; i < Math.min(rows.length, 20); i++) {
-        const cells = (rows[i] ?? []).map((c) => String(c).trim());
-        const ni = cells.findIndex((c) => c.includes("课程名称") || (c === "课程" && !cells.some((x) => x.includes("代码"))));
-        const ci = cells.findIndex((c) => c === "学分" || c.includes("学分"));
-        const si = cells.findIndex((c) => c.includes("成绩") || c.includes("分数") || c === "总评");
-        if (ni >= 0 && ci >= 0) { headerIdx = i; nameCol = ni; creditCol = ci; scoreCol = si; break; }
-      }
-      if (headerIdx < 0) {
-        setImportMsg({ ok: false, text: "没认出成绩单的表头，请确认是从教务系统导出的 xlsx 成绩单。" });
-        return;
-      }
-
-      const imported: Course[] = [];
-      let skipped = 0, gradeCount = 0;
-      for (let i = headerIdx + 1; i < rows.length; i++) {
-        const r = rows[i] ?? [];
-        const name = String(r[nameCol] ?? "").trim();
-        const credit = parseFloat(String(r[creditCol] ?? ""));
-        if (!name || !Number.isFinite(credit) || credit <= 0) { if (name) skipped++; continue; }
-        if (name.includes("平均") || name.includes("合计") || name.includes("总计")) continue;
-
-        let score: number | null = null;
-        const raw = String(r[scoreCol] ?? "").trim();
-        if (scoreCol >= 0) {
-          const num = parseFloat(raw);
-          if (Number.isFinite(num) && raw !== "") score = Math.min(100, Math.max(0, num));
-          else if (raw in GRADE_MAP) { score = GRADE_MAP[raw]; gradeCount++; }
-          else if (PASS_MARKS.has(raw)) { skipped++; continue; }
-        }
-        if (score === null) { skipped++; continue; }
-        imported.push({ id: nextId++, name, credit, score });
-      }
+      const result = parseTranscript(rows);
+      const imported = result.courses.map(course => ({ ...course, id: nextId++ }));
+      const skipped = result.issues.length;
+      const gradeCount = result.gradeCount;
+      setImportIssues(result.issues);
 
       if (!imported.length) {
         setImportMsg({ ok: false, text: "表格里没找到有效课程行，检查下是不是成绩单文件～" });
@@ -87,8 +60,11 @@ export default function GpaCalculator() {
           (skipped ? `，跳过 ${skipped} 行` : "") +
           "。",
       });
-    } catch {
-      setImportMsg({ ok: false, text: "文件解析失败，请换 xlsx 格式再试。" });
+    } catch (error) {
+      setImportMsg({ ok: false, text: error instanceof Error && /成绩单|课程名称/.test(error.message) ? error.message : "文件解析失败，请换 xlsx 格式再试。" });
+    } finally {
+      importLock.current = false;
+      setImporting(false);
     }
   };
 
@@ -133,18 +109,27 @@ export default function GpaCalculator() {
           }}
         />
         <button
+          disabled={importing}
           onClick={() => fileRef.current?.click()}
           className="rounded-full bg-sky-600 hover:bg-sky-700 text-white text-sm font-bold px-4 py-2 transition flex items-center gap-1.5 shadow-md shadow-sky-600/20"
         >
-          <Upload className="w-3.5 h-3.5" /> 导入成绩单
+          <Upload className="w-3.5 h-3.5" /> {importing ? "正在解析…" : "导入成绩单"}
         </button>
         <span className="text-xs text-muted-foreground flex items-center gap-1">
           <FileSpreadsheet className="w-3.5 h-3.5" /> 从教务系统导出的成绩单（xlsx）一键算绩点
         </span>
         {importMsg && (
-          <div className={`w-full text-xs rounded-lg px-3 py-2 border ${importMsg.ok ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-700"}`}>
+          <div role="status" className={`w-full text-xs rounded-lg px-3 py-2 border ${importMsg.ok ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-700"}`}>
             {importMsg.text}
           </div>
+        )}
+        {importIssues.length > 0 && (
+          <details className="w-full text-xs text-red-700">
+            <summary className="cursor-pointer">查看跳过的 {importIssues.length} 行及原因</summary>
+            <ul className="mt-2 max-h-40 overflow-auto space-y-1">
+              {importIssues.map((issue, index) => <li key={index}>{issue}</li>)}
+            </ul>
+          </details>
         )}
         <p className="w-full text-[11px] text-muted-foreground/70">
           文件只在你的浏览器本地解析，不会上传到任何服务器。
