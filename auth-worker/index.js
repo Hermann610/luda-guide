@@ -1,4 +1,4 @@
-// luda-auth：鹿大摸鱼站开放注册/登录服务
+// luda-auth：鹿大摸鱼站邀请制登录服务
 // 存储：Cloudflare KV（用户名 → PBKDF2 密码哈希）
 // 会话：HMAC-SHA256 签名令牌（与 Pages 中间件共享 SESSION_SECRET）
 
@@ -71,8 +71,8 @@ async function verifySessionToken(token, secret) {
     const ok = await crypto.subtle.verify("HMAC", key, b64urlDecode(sig), new TextEncoder().encode(payload));
     if (!ok) return null;
     const data = JSON.parse(new TextDecoder().decode(b64urlDecode(payload)));
-    if (!data?.u || !Number.isFinite(data.exp) || Date.now() > data.exp) return null;
-    return String(data.u);
+    if (typeof data?.u !== "string" || !data.u.trim() || data.u.length > 20 || !Number.isFinite(data.exp) || Date.now() >= data.exp) return null;
+    return data.u;
   } catch {
     return null;
   }
@@ -80,15 +80,24 @@ async function verifySessionToken(token, secret) {
 
 async function getLeaderboard(env) {
   const list = await env.USERS.get(LB_KEY, "json");
-  return Array.isArray(list) ? list : [];
+  if (list === null) return [];
+  if (!Array.isArray(list) || list.some(entry => !entry || typeof entry.u !== "string"
+    || !entry.u.trim() || !Number.isInteger(entry.s) || entry.s < 0 || entry.s > 99999
+    || !Number.isFinite(entry.t) || entry.t < 0)) {
+    throw new Error("Invalid leaderboard record");
+  }
+  return list;
 }
 
-export default {
-  async fetch(req, env) {
+async function handleRequest(req, env) {
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
+    }
+
+    if (!env.USERS || typeof env.SESSION_SECRET !== "string" || !env.SESSION_SECRET) {
+      return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503);
     }
 
     // 排行榜：返回前 50 名 {u, s, t}
@@ -106,7 +115,8 @@ export default {
 
       let body;
       try { body = await req.json(); } catch { return json({ ok: false, error: "请求格式错误" }, 400); }
-      const score = Number(body.score);
+      if (!body || typeof body !== "object" || Array.isArray(body)) return json({ ok: false, error: "请求格式错误" }, 400);
+      const score = body.score;
       if (!Number.isInteger(score) || score < 0 || score > 99999) {
         return json({ ok: false, error: "成绩不合法" }, 400);
       }
@@ -133,8 +143,12 @@ export default {
     if (req.method === "POST" && url.pathname === "/api/auth") {
       let body;
       try { body = await req.json(); } catch { return json({ ok: false, error: "请求格式错误" }, 400); }
-      const username = String(body.username ?? "").trim();
-      const password = String(body.password ?? "");
+      if (!body || typeof body !== "object" || Array.isArray(body)
+        || typeof body.username !== "string" || typeof body.password !== "string") {
+        return json({ ok: false, error: "请求格式错误" }, 400);
+      }
+      const username = body.username.trim();
+      const password = body.password;
 
       const nameErr = validateName(username);
       if (nameErr) return json({ ok: false, error: nameErr }, 400);
@@ -155,6 +169,10 @@ export default {
         await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
         return json({ ok: false, error: "账号不存在，本站不开放注册" }, 403);
       }
+      if (typeof existing.salt !== "string" || !/^(?:[0-9a-f]{2})+$/i.test(existing.salt)
+        || typeof existing.hash !== "string" || !/^[0-9a-f]{64}$/i.test(existing.hash)) {
+        return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503);
+      }
       const hash = await pbkdf2(password, existing.salt);
       if (hash !== existing.hash) {
         await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
@@ -169,5 +187,11 @@ export default {
     }
 
     return json({ ok: false, error: "not found" }, 404);
+}
+
+export default {
+  async fetch(req, env) {
+    try { return await handleRequest(req, env); }
+    catch { return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503); }
   },
 };
