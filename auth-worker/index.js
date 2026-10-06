@@ -1,54 +1,6 @@
-// luda-auth：鹿大摸鱼站邀请制登录服务
-// 存储：Cloudflare KV（用户名 → PBKDF2 密码哈希）
-// 会话：HMAC-SHA256 签名令牌（与 Pages 中间件共享 SESSION_SECRET）
-
-const TTL_MS = 7 * 24 * 3600 * 1000; // 7 天
-
-// 基础合规校验：长度、字符集、简单敏感词
-const NAME_RE = /^[\w一-鿿-]{2,20}$/;
-const BLOCKED = ["admin", "administrator", "root", "system", "官方", "管理员", "鹿大生存指南", "鹿大摸鱼站", "hermann"];
-
-function validateName(name) {
-  if (!NAME_RE.test(name)) return "名称需为 2-20 位，只能包含中文、字母、数字、下划线或连字符";
-  const lower = name.toLowerCase();
-  if (BLOCKED.some((b) => lower.includes(b.toLowerCase()))) return "这个名称不能使用，请换一个";
-  return null;
-}
-
-function b64url(buf) {  return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function pbkdf2(password, saltHex) {
-  const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]
-  );
-  const salt = new Uint8Array(saltHex.match(/../g).map((h) => parseInt(h, 16)));
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
-    key, 256
-  );
-  return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function hmacKey(secret) {
-  return crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]
-  );
-}
-
-async function sign(payloadB64, secret) {
-  const key = await hmacKey(secret);
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadB64));
-  return `${payloadB64}.${b64url(sig)}`;
-}
-
-const json = (obj, status = 200) =>
-  new Response(JSON.stringify(obj), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
-  });
+import { TTL_MS, validateName, b64url, pbkdf2, hmacKey, sign, json } from './auth-utils.js';
+import { registrationRequest } from './registration.js';
+export { RegistrationStore } from './registration.js';
 
 const LB_KEY = "leaderboard:v1";
 const LB_MAX = 50;
@@ -99,6 +51,8 @@ async function handleRequest(req, env) {
     if (!env.USERS || typeof env.SESSION_SECRET !== "string" || !env.SESSION_SECRET) {
       return json({ ok: false, error: "服务暂时不可用，请稍后再试" }, 503);
     }
+
+    if (url.pathname.startsWith('/api/register/')) return registrationRequest(req, env);
 
     // 排行榜：返回前 50 名 {u, s, t}
     if (req.method === "GET" && url.pathname === "/api/score/leaderboard") {
@@ -165,6 +119,13 @@ async function handleRequest(req, env) {
 
       const existing = await env.USERS.get(username, "json");
       if (!existing) {
+        // 已验证邮箱的账号由 Durable Object 保存；关闭新注册不影响其登录。
+        if (env.REGISTRATION) {
+          const store = env.REGISTRATION.get(env.REGISTRATION.idFromName('ruc-registration-v1'));
+          return store.fetch(new Request('https://registration.internal/login', {
+            method: 'POST', body: JSON.stringify({ username, password }),
+          }));
+        }
         // 不开放注册：账号不存在直接拒绝（账号由管理员在 KV 中预置）
         await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
         return json({ ok: false, error: "账号不存在，本站不开放注册" }, 403);
