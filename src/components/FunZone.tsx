@@ -1,18 +1,28 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { foodPool } from "@/data/guide";
 import { UtensilsCrossed, RefreshCw, MapPin } from "lucide-react";
 import type { LeaderEntry } from "@/components/BirdLeaderboard";
 
-function pick<T>(arr: T[], exclude?: T): T {
-  const pool = arr.filter((x) => x !== exclude);
-  return pool[Math.floor(Math.random() * pool.length)];
-}
+import { pickFood } from "@/lib/food-picker";
 
 export default function FunZone() {
   // ---- 今天吃什么 ----
   const [campus, setCampus] = useState<"全部" | "中关村" | "通州">("全部");
   const [food, setFood] = useState<(typeof foodPool)[number] | null>(null);
   const [spinning, setSpinning] = useState(false);
+
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => {
+    if (timerRef.current !== null) clearInterval(timerRef.current);
+  }, []);
+
+  const changeCampus = (value: typeof campus) => {
+    if (timerRef.current !== null) clearInterval(timerRef.current);
+    timerRef.current = null;
+    setSpinning(false);
+    setCampus(value);
+    setFood(null);
+  };
 
   // ---- 像素小鸟前三榜 ----
   const [top3, setTop3] = useState<LeaderEntry[] | null>(null);
@@ -26,14 +36,18 @@ export default function FunZone() {
   }, []);
 
   const spinFood = () => {
+    if (timerRef.current !== null) return;
+    const pool = campus === "全部" ? foodPool : foodPool.filter(f => f.campus === campus);
+    if (!pool.length) { setFood(null); return; }
+    const previous = food;
     setSpinning(true);
     let count = 0;
-    const timer = setInterval(() => {
-      const pool = campus === "全部" ? foodPool : foodPool.filter((f) => f.campus === campus);
-      setFood(pick(pool));
+    timerRef.current = setInterval(() => {
       count++;
+      setFood(pickFood(pool, count > 12 ? previous : null));
       if (count > 12) {
-        clearInterval(timer);
+        clearInterval(timerRef.current!);
+        timerRef.current = null;
         setSpinning(false);
       }
     }, 80);
@@ -52,14 +66,14 @@ export default function FunZone() {
 
         <div className="flex gap-2 mb-4">
           {(["全部", "中关村", "通州"] as const).map((c) => (
-            <button key={c} onClick={() => setCampus(c)}
+            <button key={c} onClick={() => changeCampus(c)} aria-pressed={campus === c}
               className={`sticker transition ${campus === c ? "bg-orange-600 text-white" : "bg-muted text-muted-foreground hover:bg-muted/70"}`}>
               {c}
             </button>
           ))}
         </div>
 
-        <div className={`rounded-2xl border-2 border-dashed border-orange-300 bg-orange-50/60 p-6 text-center min-h-[150px] flex flex-col items-center justify-center ${food && !spinning ? "animate-pop" : ""}`}>
+        <div aria-live={spinning ? "off" : "polite"} aria-busy={spinning} className={`rounded-2xl border-2 border-dashed border-orange-300 bg-orange-50/60 p-6 text-center min-h-[150px] flex flex-col items-center justify-center ${food && !spinning ? "animate-pop" : ""}`}>
           {food ? (
             <>
               <div className={`text-5xl mb-2 ${spinning ? "animate-roulette" : "animate-float"}`}>{food.emoji}</div>
