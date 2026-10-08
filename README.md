@@ -1,8 +1,10 @@
 # 鹿大摸鱼站 V1.0
 
+> ⚠️ **本站已于 2026-10-08 下线**：线上地址全部返回 404 NOT FOUND，历史部署版本已删除，仅保留本仓库代码。如需重新上线，本地 `npm run build` 后重新部署到 Cloudflare Pages 即可（需重新配置环境变量与会话密钥）。
+
 一个校园摸鱼小工具合集 —— 今天吃什么转盘、GPA 计算器（成绩单 xlsx 一键导入）、像素小鸟排行榜、浏览量统计。
 
-**在线地址：https://luda-guide.pages.dev/**
+~~在线地址：https://luda-guide.pages.dev/~~（已下线）
 
 ![技术栈](https://img.shields.io/badge/React-TypeScript%20%2B%20Vite%20%2B%20Tailwind-0b7285)
 ![许可](https://img.shields.io/badge/license-代码%20MIT%20%2F%20内容%20CC--BY--NC--SA--4.0-a31e32)
