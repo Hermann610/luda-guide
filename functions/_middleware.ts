@@ -83,18 +83,18 @@ const PAGE = (body: string) => `<!doctype html>
 const loginForm = (error?: string) => PAGE(`
   <div class="card">
   <div class="deer">🦌</div>
-  <h1>登录</h1>
-  <div class="sub">请使用内部账号登录</div>
-  <div class="notice">🔒 本站不对外开放<br />只是一个练手项目，没什么可以看的了<br /><span style="font-size:12px; font-weight:normal;">账号问题请联系 2304179201@qq.com</span></div>
+  <h1>登录 / 注册</h1>
+  <div class="sub">请随意输入你想用的名称（要求合法合规），未注册的自动注册</div>
   <form method="POST" action="/login">
-    <label for="u">账号</label>
+    <label for="u">名称</label>
     <input id="u" name="username" autocomplete="username" required autofocus maxlength="20" />
     <label for="p">密码</label>
     <input id="p" name="password" type="password" autocomplete="current-password" required minlength="6" maxlength="64" />
     <button type="submit">进入</button>
     ${error ? `<div class="err">${error}</div>` : ""}
   </form>
-  <div class="tip">登录状态保留 7 天<br />没有账号？请联系站长</div>
+  <a class="guest" href="/">先随便逛逛（游客访问）→</a>
+  <div class="tip">名称 2-20 位（中文/字母/数字/下划线/连字符），密码至少 6 位<br />登录状态保留 7 天</div>
   </div>
 `);
 
@@ -159,17 +159,6 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     return new Response(loginForm(), { headers: { ...headers, "Cache-Control": "no-store" } });
   }
 
-  // 未登录：接口返回 401，页面跳转登录（/api/me、/login、/logout 不受限）
-  if (!user) {
-    if (url.pathname.startsWith("/api/")) {
-      return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
-      });
-    }
-    return new Response(null, { status: 302, headers: { "Location": "/login", "Cache-Control": "no-store" } });
-  }
-
   // 小游戏排行榜
   if (url.pathname === "/api/score/leaderboard") {
     try {
@@ -212,6 +201,6 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     }
   }
 
-  // 已登录，放行
+  // 其余一切路径：开放访问
   return context.next();
 };

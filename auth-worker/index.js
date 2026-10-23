@@ -15,6 +15,12 @@ function validateName(name) {
   return null;
 }
 
+function randHex(bytes) {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function b64url(buf) {  return btoa(String.fromCharCode(...new Uint8Array(buf)))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
@@ -150,22 +156,26 @@ export default {
       }
 
       const existing = await env.USERS.get(username, "json");
-      if (!existing) {
-        // 不开放注册：账号不存在直接拒绝（账号由管理员在 KV 中预置）
-        await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
-        return json({ ok: false, error: "账号不存在，本站不开放注册" }, 403);
+      let registered = false;
+      if (existing) {
+        const hash = await pbkdf2(password, existing.salt);
+        if (hash !== existing.hash) {
+          await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
+          return json({ ok: false, error: "这个名称已被注册，密码不正确" }, 403);
+        }
+        await env.USERS.delete(lockKey);
+      } else {
+        // 自由注册：未注册 → 自动注册
+        const salt = randHex(16);
+        const hash = await pbkdf2(password, salt);
+        await env.USERS.put(username, JSON.stringify({ salt, hash, created: Date.now() }));
+        registered = true;
       }
-      const hash = await pbkdf2(password, existing.salt);
-      if (hash !== existing.hash) {
-        await env.USERS.put(lockKey, String(fails + 1), { expirationTtl: 600 });
-        return json({ ok: false, error: "密码不正确" }, 403);
-      }
-      await env.USERS.delete(lockKey);
 
       const expiry = Date.now() + TTL_MS;
       const payload = b64url(new TextEncoder().encode(JSON.stringify({ u: username, exp: expiry })).buffer);
       const token = await sign(payload, env.SESSION_SECRET);
-      return json({ ok: true, username, token });
+      return json({ ok: true, username, token, registered });
     }
 
     return json({ ok: false, error: "not found" }, 404);
